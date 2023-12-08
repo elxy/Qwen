@@ -17,8 +17,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from transformers.generation import GenerationConfig
+from modelscope import AutoModelForCausalLM, AutoTokenizer
+from modelscope import GenerationConfig
 
 
 def _gc(forced: bool = False):
@@ -101,9 +101,7 @@ class ChatCompletionResponseStreamChoice(BaseModel):
 class ChatCompletionResponse(BaseModel):
     model: str
     object: Literal["chat.completion", "chat.completion.chunk"]
-    choices: List[
-        Union[ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice]
-    ]
+    choices: List[Union[ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice]]
     created: Optional[int] = Field(default_factory=lambda: int(time.time()))
 
 
@@ -248,19 +246,13 @@ def parse_messages(messages, functions):
                         content = f"Thought: I can use {f_name}."
                 content = f"\n{content}\nAction: {f_name}\nAction Input: {f_args}"
             if messages[-1].role == "user":
-                messages.append(
-                    ChatMessage(role="assistant", content=content.lstrip("\n").rstrip())
-                )
+                messages.append(ChatMessage(role="assistant", content=content.lstrip("\n").rstrip()))
             else:
                 messages[-1].content += content
         elif role == "user":
-            messages.append(
-                ChatMessage(role="user", content=content.lstrip("\n").rstrip())
-            )
+            messages.append(ChatMessage(role="user", content=content.lstrip("\n").rstrip()))
         else:
-            raise HTTPException(
-                status_code=400, detail=f"Invalid request: Incorrect role {role}."
-            )
+            raise HTTPException(status_code=400, detail=f"Invalid request: Incorrect role {role}.")
 
     query = _TEXT_COMPLETION_CMD
     if messages[-1].role == "user":
@@ -281,7 +273,7 @@ def parse_messages(messages, functions):
             for t in dummy_thought.values():
                 t = t.lstrip("\n")
                 if bot_msg.startswith(t) and ("\nAction: " in bot_msg):
-                    bot_msg = bot_msg[len(t) :]
+                    bot_msg = bot_msg[len(t):]
             history.append([usr_msg, bot_msg])
         else:
             raise HTTPException(
@@ -305,22 +297,25 @@ def parse_response(response):
             # because the output text may have discarded the stop word.
             response = response.rstrip() + "\nObservation:"  # Add it back.
         k = response.rfind("\nObservation:")
-        func_name = response[i + len("\nAction:") : j].strip()
-        func_args = response[j + len("\nAction Input:") : k].strip()
+        func_name = response[i + len("\nAction:"):j].strip()
+        func_args = response[j + len("\nAction Input:"):k].strip()
     if func_name:
         choice_data = ChatCompletionResponseChoice(
             index=0,
             message=ChatMessage(
                 role="assistant",
                 content=response[:i],
-                function_call={"name": func_name, "arguments": func_args},
+                function_call={
+                    "name": func_name,
+                    "arguments": func_args
+                },
             ),
             finish_reason="function_call",
         )
         return choice_data
     z = response.rfind("\nFinal Answer: ")
     if z >= 0:
-        response = response[z + len("\nFinal Answer: ") :]
+        response = response[z + len("\nFinal Answer: "):]
     choice_data = ChatCompletionResponseChoice(
         index=0,
         message=ChatMessage(role="assistant", content=response),
@@ -333,13 +328,13 @@ def parse_response(response):
 def text_complete_last_message(history, stop_words_ids, gen_kwargs):
     im_start = "<|im_start|>"
     im_end = "<|im_end|>"
-    prompt = f"{im_start}system\nYou are a helpful assistant.{im_end}"
+    prompt = f"{im_start}system\n请用100个字的中文总结文章的内容。{im_end}"
     for i, (query, response) in enumerate(history):
         query = query.lstrip("\n").rstrip()
         response = response.lstrip("\n").rstrip()
         prompt += f"\n{im_start}user\n{query}{im_end}"
         prompt += f"\n{im_start}assistant\n{response}{im_end}"
-    prompt = prompt[: -len(im_end)]
+    prompt = prompt[:-len(im_end)]
 
     _stop_words_ids = [tokenizer.encode(im_end)]
     if stop_words_ids:
@@ -351,7 +346,7 @@ def text_complete_last_message(history, stop_words_ids, gen_kwargs):
     output = model.generate(input_ids, stop_words_ids=stop_words_ids, **gen_kwargs).tolist()[0]
     output = tokenizer.decode(output, errors="ignore")
     assert output.startswith(prompt)
-    output = output[len(prompt) :]
+    output = output[len(prompt):]
     output = trim_stop_words(output, ["<|endoftext|>", im_end])
     print(f"<completion>\n{prompt}\n<!-- *** -->\n{output}\n</completion>")
     return output
@@ -392,13 +387,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
     if query is _TEXT_COMPLETION_CMD:
         response = text_complete_last_message(history, stop_words_ids=stop_words_ids, gen_kwargs=gen_kwargs)
     else:
-        response, _ = model.chat(
-            tokenizer,
-            query,
-            history=history,
-            stop_words_ids=stop_words_ids,
-            **gen_kwargs
-        )
+        response, _ = model.chat(tokenizer, query, history=history, stop_words_ids=stop_words_ids, **gen_kwargs)
         print(f"<chat>\n{history}\n{query}\n<!-- *** -->\n{response}\n</chat>")
     _gc()
 
@@ -411,9 +400,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
             message=ChatMessage(role="assistant", content=response),
             finish_reason="stop",
         )
-    return ChatCompletionResponse(
-        model=request.model, choices=[choice_data], object="chat.completion"
-    )
+    return ChatCompletionResponse(model=request.model, choices=[choice_data], object="chat.completion")
 
 
 def _dump_json(data: BaseModel, *args, **kwargs) -> str:
@@ -424,15 +411,15 @@ def _dump_json(data: BaseModel, *args, **kwargs) -> str:
 
 
 async def predict(
-    query: str, history: List[List[str]], model_id: str, stop_words: List[str], gen_kwargs: Dict,
+    query: str,
+    history: List[List[str]],
+    model_id: str,
+    stop_words: List[str],
+    gen_kwargs: Dict,
 ):
     global model, tokenizer
-    choice_data = ChatCompletionResponseStreamChoice(
-        index=0, delta=DeltaMessage(role="assistant"), finish_reason=None
-    )
-    chunk = ChatCompletionResponse(
-        model=model_id, choices=[choice_data], object="chat.completion.chunk"
-    )
+    choice_data = ChatCompletionResponseStreamChoice(index=0, delta=DeltaMessage(role="assistant"), finish_reason=None)
+    chunk = ChatCompletionResponse(model=model_id, choices=[choice_data], object="chat.completion.chunk")
     yield "{}".format(_dump_json(chunk, exclude_unset=True))
 
     current_length = 0
@@ -443,9 +430,11 @@ async def predict(
             status_code=400,
             detail="Invalid request: custom stop words are not yet supported for stream mode.",
         )
-    response_generator = model.chat_stream(
-        tokenizer, query, history=history, stop_words_ids=stop_words_ids, **gen_kwargs
-    )
+    response_generator = model.chat_stream(tokenizer,
+                                           query,
+                                           history=history,
+                                           stop_words_ids=stop_words_ids,
+                                           **gen_kwargs)
     for new_response in response_generator:
         if len(new_response) == current_length:
             continue
@@ -453,20 +442,14 @@ async def predict(
         new_text = new_response[current_length:]
         current_length = len(new_response)
 
-        choice_data = ChatCompletionResponseStreamChoice(
-            index=0, delta=DeltaMessage(content=new_text), finish_reason=None
-        )
-        chunk = ChatCompletionResponse(
-            model=model_id, choices=[choice_data], object="chat.completion.chunk"
-        )
+        choice_data = ChatCompletionResponseStreamChoice(index=0,
+                                                         delta=DeltaMessage(content=new_text),
+                                                         finish_reason=None)
+        chunk = ChatCompletionResponse(model=model_id, choices=[choice_data], object="chat.completion.chunk")
         yield "{}".format(_dump_json(chunk, exclude_unset=True))
 
-    choice_data = ChatCompletionResponseStreamChoice(
-        index=0, delta=DeltaMessage(), finish_reason="stop"
-    )
-    chunk = ChatCompletionResponse(
-        model=model_id, choices=[choice_data], object="chat.completion.chunk"
-    )
+    choice_data = ChatCompletionResponseStreamChoice(index=0, delta=DeltaMessage(), finish_reason="stop")
+    chunk = ChatCompletionResponse(model=model_id, choices=[choice_data], object="chat.completion.chunk")
     yield "{}".format(_dump_json(chunk, exclude_unset=True))
     yield "[DONE]"
 
@@ -479,15 +462,11 @@ def _get_args():
         "-c",
         "--checkpoint-path",
         type=str,
-        default="Qwen/Qwen-7B-Chat",
+        default="qwen/Qwen-7B-Chat-Int8",
         help="Checkpoint name or path, default to %(default)r",
     )
-    parser.add_argument(
-        "--cpu-only", action="store_true", help="Run demo with CPU only"
-    )
-    parser.add_argument(
-        "--server-port", type=int, default=8000, help="Demo server port."
-    )
+    parser.add_argument("--cpu-only", action="store_true", help="Run demo with CPU only")
+    parser.add_argument("--server-port", type=int, default=8000, help="Demo server port.")
     parser.add_argument(
         "--server-name",
         type=str,
@@ -495,8 +474,7 @@ def _get_args():
         help="Demo server name. Default: 127.0.0.1, which is only visible from the local computer."
         " If you want other computers to access your server, use 0.0.0.0 instead.",
     )
-    parser.add_argument("--disable-gc", action="store_true",
-                        help="Disable GC after each response generated.")
+    parser.add_argument("--disable-gc", action="store_true", help="Disable GC after each response generated.")
 
     args = parser.parse_args()
     return args
